@@ -35,7 +35,6 @@ class ChatbotQueryUseCase:
         """
         app_logger.info(f"Chatbot query from user {user_id}: {query[:100]}...")
         
-        # L'agent va automatiquement décider quels outils utiliser
         result = await self.agent.query(
             question=query,
             subject_id=str(subject_id),

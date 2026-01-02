@@ -43,7 +43,6 @@ class AnalyzeSubjectSentimentUseCase:
         """
         app_logger.info(f"Analyzing sentiment for subject {subject_id} over {period_days} days")
         
-        # 1. Récupérer les réponses textuelles
         period_start = datetime.now() - timedelta(days=period_days)
         responses = await self.response_repo.get_text_responses_by_subject(
             subject_id=subject_id,
@@ -57,15 +56,12 @@ class AnalyzeSubjectSentimentUseCase:
                 actual=len(responses),
             )
         
-        # 2. Récupérer les notations étoiles
         star_ratings = await self.response_repo.get_star_ratings_by_subject(
             subject_id=subject_id
         )
         
-        # 3. Calculer le score moyen des étoiles
         star_score = self._calculate_star_score(star_ratings)
         
-        # 4. Analyser le sentiment via LLM
         text_responses = [r['value_text'] for r in responses if r.get('value_text')]
         
         # Récupérer le nom de la matière (simplification, devrait venir d'un repo)
@@ -76,19 +72,15 @@ class AnalyzeSubjectSentimentUseCase:
             responses=text_responses,
         )
         
-        # 5. Combiner les scores
         combined_score = self._combine_scores(
             llm_score=llm_analysis.get('overall_score', 0),
             star_score=star_score,
         )
         
-        # 6. Calculer la distribution
         distribution = self._calculate_distribution(llm_analysis, star_ratings)
         
-        # 7. Comparer avec période précédente (trend)
         trend = await self._calculate_trend(subject_id, period_days, combined_score)
         
-        # 8. Extraire les preuves
         positive_evidence = self._extract_evidence(
             responses, 
             llm_analysis.get('positive_points', [])

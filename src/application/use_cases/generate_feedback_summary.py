@@ -48,7 +48,6 @@ class GenerateFeedbackSummaryUseCase:
         """
         app_logger.info(f"Generating feedback summary for subject {subject_id}")
         
-        # 1. Vérifier le cache
         cache_key = f"feedback_summary_{subject_id}_{period_days}"
         if use_cache:
             cached = await self.cache_repo.get(cache_key)
@@ -56,7 +55,6 @@ class GenerateFeedbackSummaryUseCase:
                 app_logger.info(f"Using cached summary for subject {subject_id}")
                 return cached
         
-        # 2. Générer les insights complets
         try:
             insights_data = await self.analysis_facade.generate_comprehensive_insights(
                 subject_id=subject_id,
@@ -71,7 +69,6 @@ class GenerateFeedbackSummaryUseCase:
                 "generated_at": datetime.now().isoformat(),
             }
         
-        # 3. Générer le résumé textuel via LLM
         summary = await self._generate_text_summary(insights_data)
         full_summary = await self._generate_full_summary(insights_data)
         
@@ -81,7 +78,6 @@ class GenerateFeedbackSummaryUseCase:
             "generated_at": datetime.now().isoformat(),
         }
         
-        # 4. Mettre en cache (expire dans 1 heure)
         expires_at = datetime.now() + timedelta(hours=1)
         await self.cache_repo.set(cache_key, result, expires_at)
         
@@ -93,13 +89,15 @@ class GenerateFeedbackSummaryUseCase:
         themes = insights_data.get("themes", [])
         insights = insights_data.get("insights", [])
         
-        prompt = f"""Génère un résumé court (2-3 phrases) des retours d'élèves pour cette matière.
+        prompt = f"""
+            Génère un résumé court (2-3 phrases) des retours d'élèves pour cette matière.
 
-Sentiment global: {sentiment.get('overall_score', 0):.2f} (sur -1 à 1)
-Thèmes identifiés: {len(themes)}
-Insights: {len(insights)}
+            Sentiment global: {sentiment.get('overall_score', 0):.2f} (sur -1 à 1)
+            Thèmes identifiés: {len(themes)}
+            Insights: {len(insights)}
 
-Résumé court (2-3 phrases, en français, factuel et actionnable):"""
+            Résumé court (2-3 phrases, en français, factuel et actionnable):
+        """
         
         try:
             result = await self.langchain_service.llm.ainvoke(prompt)
@@ -114,15 +112,17 @@ Résumé court (2-3 phrases, en français, factuel et actionnable):"""
         themes = insights_data.get("themes", [])
         insights = insights_data.get("insights", [])
         
-        prompt = f"""Génère un résumé détaillé des retours d'élèves pour cette matière.
+        prompt = f"""
+            Génère un résumé détaillé des retours d'élèves pour cette matière.
 
-Données:
-- Sentiment global: {sentiment.get('overall_score', 0):.2f}
-- Distribution: {sentiment.get('positive_percentage', 0):.0f}% positif, {sentiment.get('negative_percentage', 0):.0f}% négatif
-- Thèmes principaux: {', '.join([t.get('label', '') for t in themes[:3]])}
-- Insights actionnables: {len([i for i in insights if i.get('priority') in ['high', 'urgent']])}
+            Données:
+            - Sentiment global: {sentiment.get('overall_score', 0):.2f}
+            - Distribution: {sentiment.get('positive_percentage', 0):.0f}% positif, {sentiment.get('negative_percentage', 0):.0f}% négatif
+            - Thèmes principaux: {', '.join([t.get('label', '') for t in themes[:3]])}
+            - Insights actionnables: {len([i for i in insights if i.get('priority') in ['high', 'urgent']])}
 
-Résumé détaillé (paragraphe structuré, en français, factuel et actionnable):"""
+            Résumé détaillé (paragraphe structuré, en français, factuel et actionnable):
+        """
         
         try:
             result = await self.langchain_service.llm.ainvoke(prompt)

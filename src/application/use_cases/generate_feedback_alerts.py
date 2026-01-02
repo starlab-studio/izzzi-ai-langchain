@@ -32,7 +32,6 @@ class GenerateFeedbackAlertsUseCase:
         """
         app_logger.info(f"Generating feedback alerts for subject {subject_id}")
         
-        # 1. Générer les insights complets
         try:
             insights_data = await self.analysis_facade.generate_comprehensive_insights(
                 subject_id=subject_id,
@@ -42,12 +41,10 @@ class GenerateFeedbackAlertsUseCase:
             app_logger.error(f"Error generating insights for alerts: {e}")
             return []
         
-        # 2. Filtrer les insights qui sont des alertes
         all_insights = insights_data.get("insights", [])
         
         alerts = []
         for idx, insight in enumerate(all_insights):
-            # Filtrer: priority=high|urgent ET type=alert|negative
             priority = insight.get("priority", "")
             insight_type = insight.get("type", "")
             

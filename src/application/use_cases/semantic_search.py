@@ -37,10 +37,8 @@ class SemanticSearchUseCase:
         """
         app_logger.info(f"Semantic search: '{query[:50]}...' in subject {subject_id}")
         
-        # 1. Générer l'embedding de la requête
         query_embedding = await self.embedding_service.embed_text(query)
         
-        # 2. Recherche vectorielle
         results = await self.embedding_repo.find_similar(
             query_embedding=query_embedding,
             subject_id=subject_id,
@@ -48,7 +46,6 @@ class SemanticSearchUseCase:
             similarity_threshold=similarity_threshold,
         )
         
-        # 3. Formater les résultats
         formatted_results = [
             {
                 "text": embedding.text_content,
