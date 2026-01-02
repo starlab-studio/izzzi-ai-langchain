@@ -4,7 +4,7 @@ from datetime import datetime
 from src.infrastructure.models import SubjectAnalysisModel
 
 class SubjectAnalysisMapper:
-    """Mapper pour SubjectAnalysisModel"""
+    """Mapper for SubjectAnalysisModel"""
     
     @staticmethod
     def model_to_dict(model: SubjectAnalysisModel) -> dict:
@@ -24,7 +24,7 @@ class SubjectAnalysisMapper:
     
     @staticmethod
     def dict_to_model_data(data: dict) -> dict:
-        """Convertit un dictionnaire en données pour créer un modèle"""
+        """Convert a dictionnary into data for postgres model"""
         return {
             "subject_id": UUID(data["subject_id"]) if isinstance(data["subject_id"], str) else data["subject_id"],
             "organization_id": UUID(data["organization_id"]) if isinstance(data["organization_id"], str) else data["organization_id"],

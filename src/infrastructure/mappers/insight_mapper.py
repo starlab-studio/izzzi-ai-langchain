@@ -4,7 +4,7 @@ from src.domain.entities.insight import Insight, InsightType, InsightPriority
 from src.infrastructure.models import InsightModel
 
 class InsightMapper:
-    """Mapper entre InsightModel et Insight entity"""
+    """Mapper between InsightModel and Insight entity"""
     
     @staticmethod
     def model_to_entity(model: InsightModel) -> Insight:

@@ -5,7 +5,7 @@ from src.domain.entities.sentiment import SentimentAnalysis, SentimentEvidence
 from src.infrastructure.models import SubjectAnalysisModel
 
 class SentimentMapper:
-    """Mapper entre SubjectAnalysisModel et SentimentAnalysis entity"""
+    """Mapper between SubjectAnalysisModel and SentimentAnalysis entity"""
     
     @staticmethod
     def model_to_entity(model: SubjectAnalysisModel) -> SentimentAnalysis:
