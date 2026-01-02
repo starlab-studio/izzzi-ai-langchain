@@ -1,11 +1,27 @@
 FROM python:3.11-slim
 
-WORKDIR /code
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-COPY ./requirements.txt /code/requirements.txt
+WORKDIR /app
 
-RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    postgresql-client \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY ./main.py /code/
+COPY requirements.txt .
 
-CMD ["fastapi", "run", "main.py", "--port", "80"]
+RUN pip install --no-cache-dir -r requirements.txt
+
+# RUN python -m spacy download fr_core_news_sm
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
