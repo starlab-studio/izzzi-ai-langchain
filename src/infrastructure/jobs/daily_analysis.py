@@ -4,9 +4,10 @@ from typing import List, Dict, Any
 from sqlalchemy import text
 import httpx
 from collections import defaultdict
+import redis
 
 from src.infrastructure.jobs.celery_app import celery_app
-from src.infrastructure.database.connection import async_session_maker
+from src.infrastructure.database.connection import create_celery_session_maker
 from src.infrastructure.repositories.postgres_response_repository import (
     PostgresResponseRepository
 )
@@ -15,6 +16,11 @@ from src.application.use_cases.generate_feedback_alerts import GenerateFeedbackA
 from src.core.logger import app_logger
 from src.configs import get_settings
 from uuid import UUID
+
+# Redis client for distributed locking
+settings = get_settings()
+redis_client = redis.from_url(settings.REDIS_URL)
+
 
 @celery_app.task(
     name="src.infrastructure.jobs.daily_analysis.daily_analysis_task",
@@ -45,104 +51,141 @@ def daily_analysis_task():
         app_logger.error(f"Error in daily analysis: {e}")
         raise
 
+
+def acquire_subject_lock(subject_id: str, expire_seconds: int = 300) -> bool:
+    """
+    Try to acquire a distributed lock for processing a subject.
+    Returns True if lock acquired, False if already locked.
+    """
+    lock_key = f"daily_analysis:lock:{subject_id}"
+    return redis_client.set(lock_key, "1", nx=True, ex=expire_seconds)
+
+
+def release_subject_lock(subject_id: str) -> None:
+    """Release the distributed lock for a subject."""
+    lock_key = f"daily_analysis:lock:{subject_id}"
+    redis_client.delete(lock_key)
+
+
 async def daily_analysis_async() -> Dict[str, Any]:
     """Async logic for daily analysis"""
+
+    engine, session_maker = create_celery_session_maker()
     
-    async with async_session_maker() as session:
-        # Query to get subjects with recent responses, including organization name
-        query = text("""
-            SELECT DISTINCT 
-                s.id as subject_id,
-                s.name as subject_name,
-                s.organization_id,
-                o.name as organization_name,
-                COUNT(DISTINCT r.id) as response_count
-            FROM subjects s
-            JOIN organizations o ON o.id = s.organization_id
-            JOIN quizzes q ON q.subject_id = s.id
-            JOIN responses r ON r.quiz_id = q.id
-            WHERE r.submitted_at >= NOW() - INTERVAL '24 hours'
-              AND s.is_active = true
-            GROUP BY s.id, s.name, s.organization_id, o.name
-            HAVING COUNT(DISTINCT r.id) >= 3
-            ORDER BY response_count DESC
-        """)
-        
-        result = await session.execute(query)
-        subjects = result.fetchall()
-        
-        if not subjects:
-            app_logger.info("No active subjects with recent responses")
-            return {"subjects_analyzed": 0, "alerts": 0}
-        
-        app_logger.info(f"Found {len(subjects)} subjects to analyze")
-        
-        analyzed_count = 0
-        total_alerts_sent = 0
-        
-        # Group subjects by organization for batch processing
-        subjects_by_org = defaultdict(list)
-        for subject in subjects:
-            subjects_by_org[str(subject.organization_id)].append(subject)
-        
-        for organization_id, org_subjects in subjects_by_org.items():
-            try:
-                # Create facade and use case for this organization
-                facade = await create_facade_for_analysis(session)
-                alerts_use_case = GenerateFeedbackAlertsUseCase(analysis_facade=facade)
-                
-                # Process each subject in this organization
-                alerts_by_subject: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-                
-                for subject in org_subjects:
-                    try:
-                        subject_id = UUID(str(subject.subject_id))
+    try:
+        async with session_maker() as session:
+            # Query to get subjects with recent responses, including organization name
+            query = text("""
+                SELECT DISTINCT 
+                    s.id as subject_id,
+                    s.name as subject_name,
+                    s.organization_id,
+                    o.name as organization_name,
+                    COUNT(DISTINCT r.id) as response_count
+                FROM subjects s
+                JOIN organizations o ON o.id = s.organization_id
+                JOIN quizzes q ON q.subject_id = s.id
+                JOIN responses r ON r.quiz_id = q.id
+                WHERE r.submitted_at >= NOW() - INTERVAL '24 hours'
+                AND s.is_active = true
+                GROUP BY s.id, s.name, s.organization_id, o.name
+                HAVING COUNT(DISTINCT r.id) >= 3
+                ORDER BY response_count DESC
+            """)
+            
+            result = await session.execute(query)
+            subjects = result.fetchall()
+            
+            if not subjects:
+                app_logger.info("No active subjects with recent responses")
+                return {"subjects_analyzed": 0, "alerts_sent": 0, "skipped": 0}
+            
+            app_logger.info(f"Found {len(subjects)} subjects to analyze")
+            
+            analyzed_count = 0
+            total_alerts_sent = 0
+            skipped_count = 0
+            
+            # Group subjects by organization for batch processing
+            subjects_by_org = defaultdict(list)
+            for subject in subjects:
+                subjects_by_org[str(subject.organization_id)].append(subject)
+            
+            for organization_id, org_subjects in subjects_by_org.items():
+                try:
+                    # Create facade and use case for this organization
+                    facade = await create_facade_for_analysis(session)
+                    alerts_use_case = GenerateFeedbackAlertsUseCase(analysis_facade=facade)
+                    
+                    # Process each subject in this organization
+                    alerts_by_subject: Dict[str, Dict[str, Any]] = {}
+                    
+                    for subject in org_subjects:
+                        subject_id_str = str(subject.subject_id)
                         
-                        # Generate alerts using the use case
-                        alerts = await alerts_use_case.execute(
-                            subject_id=subject_id,
-                            period_days=7,  # Last week
-                        )
-                        
-                        if alerts:
-                            alerts_by_subject[str(subject.subject_id)] = {
-                                'alerts': alerts,
-                                'subject_name': subject.subject_name,
-                                'organization_name': subject.organization_name,
-                            }
-                            analyzed_count += 1
-                            
-                    except Exception as e:
-                        app_logger.error(f"Error generating alerts for subject {subject.subject_id}: {e}")
-                        continue
-                
-                # Send alerts grouped by subject to backend
-                if alerts_by_subject:
-                    for subject_id, alert_data in alerts_by_subject.items():
-                        try:
-                            await send_alert_to_backend(
-                                organization_id=organization_id,
-                                organization_name=alert_data['organization_name'],
-                                subject_id=subject_id,
-                                subject_name=alert_data['subject_name'],
-                                alerts=alert_data['alerts'],
+                        # Try to acquire lock for this subject
+                        if not acquire_subject_lock(subject_id_str):
+                            app_logger.info(
+                                f"Subject {subject_id_str} already being processed by another worker, skipping"
                             )
-                            total_alerts_sent += len(alert_data['alerts'])
-                        except Exception as e:
-                            app_logger.error(f"Error sending alerts to backend for subject {subject_id}: {e}")
+                            skipped_count += 1
                             continue
-                
-            except Exception as e:
-                app_logger.error(f"Error processing organization {organization_id}: {e}")
-                continue
-        
-        await session.commit()
-        
-        return {
-            "subjects_analyzed": analyzed_count,
-            "alerts_sent": total_alerts_sent,
-            "timestamp": datetime.now().isoformat(),
-        }
+                        
+                        try:
+                            subject_id = UUID(subject_id_str)
+                            
+                            # Generate alerts using the use case
+                            alerts = await alerts_use_case.execute(
+                                subject_id=subject_id,
+                                period_days=7,  # Last week
+                            )
+                            
+                            if alerts:
+                                alerts_by_subject[subject_id_str] = {
+                                    'alerts': alerts,
+                                    'subject_name': subject.subject_name,
+                                    'organization_name': subject.organization_name,
+                                }
+                                analyzed_count += 1
+                                
+                        except Exception as e:
+                            app_logger.error(f"Error generating alerts for subject {subject_id_str}: {e}")
+                            continue
+                        finally:
+                            # Always release the lock after processing
+                            release_subject_lock(subject_id_str)
+                    
+                    # Send alerts grouped by subject to backend
+                    if alerts_by_subject:
+                        for subject_id, alert_data in alerts_by_subject.items():
+                            try:
+                                await send_alert_to_backend(
+                                    organization_id=organization_id,
+                                    organization_name=alert_data['organization_name'],
+                                    subject_id=subject_id,
+                                    subject_name=alert_data['subject_name'],
+                                    alerts=alert_data['alerts'],
+                                )
+                                total_alerts_sent += len(alert_data['alerts'])
+                            except Exception as e:
+                                app_logger.error(f"Error sending alerts to backend for subject {subject_id}: {e}")
+                                continue
+                    
+                except Exception as e:
+                    app_logger.error(f"Error processing organization {organization_id}: {e}")
+                    continue
+            
+            await session.commit()
+            
+            return {
+                "subjects_analyzed": analyzed_count,
+                "alerts_sent": total_alerts_sent,
+                "skipped": skipped_count,
+                "timestamp": datetime.now().isoformat(),
+            }
+    finally:
+        await engine.dispose()
+
 
 async def create_facade_for_analysis(session) -> AnalysisFacade:
     """Helper to create facade with dependencies"""
@@ -214,6 +257,7 @@ async def create_facade_for_analysis(session) -> AnalysisFacade:
     
     return facade
 
+
 async def save_analysis_to_cache(session, analysis: Dict[str, Any]):
     """Save analysis to analysis_cache table"""
     from src.infrastructure.database.models import AnalysisCacheModel
@@ -229,6 +273,7 @@ async def save_analysis_to_cache(session, analysis: Dict[str, Any]):
     )
     
     session.add(cache_entry)
+
 
 async def send_alert_to_backend(
     organization_id: str,
@@ -263,7 +308,7 @@ async def send_alert_to_backend(
                 },
             )
             
-            if response.status_code == 200:
+            if response.status_code in (200, 201):
                 app_logger.info(
                     f"Alerts successfully sent to backend for subject {subject_id}"
                 )

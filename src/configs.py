@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     SERVICE_PORT: int = 8000
     
     # Backend API (for report submission)
-    BACKEND_URL: str = "http://localhost:3000"
+    BACKEND_URL: str = "http://localhost:3000/api"
 
 @lru_cache()
 def get_settings() -> Settings:

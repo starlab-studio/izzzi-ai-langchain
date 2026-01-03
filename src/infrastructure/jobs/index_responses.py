@@ -4,7 +4,7 @@ from sqlalchemy import text
 from celery import Task
 
 from src.infrastructure.jobs.celery_app import celery_app
-from src.infrastructure.database.connection import async_session_maker
+from src.infrastructure.database.connection import create_celery_session_maker
 from src.infrastructure.frameworks.embedding_service import EmbeddingService
 from src.infrastructure.repositories.postgres_embedding_repository import (
     PostgresEmbeddingRepository
@@ -57,59 +57,63 @@ def index_new_responses_task(self, batch_size: int = 100):
 
 async def index_responses_async(batch_size: int) -> Dict[str, Any]:
     """Logique async d'indexation"""
-    
-    async with async_session_maker() as session:
-        embedding_repo = PostgresEmbeddingRepository(session)
-        embedding_service = EmbeddingService()
-        
-        # 1. Récupérer les réponses non indexées
-        unindexed = await embedding_repo.get_unindexed_responses(limit=batch_size)
-        
-        if not unindexed:
-            app_logger.info("No new responses to index")
-            return {"indexed": 0, "skipped": 0, "errors": 0}
-        
-        app_logger.info(f"Found {len(unindexed)} responses to index")
-        
-        # 2. Préparer les textes pour batch embedding
-        texts = [item['text_content'] for item in unindexed]
-        
-        # 3. Générer les embeddings en batch (plus efficace)
-        try:
-            embeddings = await embedding_service.embed_batch(texts)
-        except Exception as e:
-            app_logger.error(f"Error generating embeddings: {e}")
-            return {"indexed": 0, "skipped": len(unindexed), "errors": len(unindexed)}
-        
-        # 4. Créer les entités et sauvegarder
-        embedding_entities = []
-        for item, embedding_vector in zip(unindexed, embeddings):
-            entity = ResponseEmbedding(
-                id=uuid4(),
-                response_id=item['response_id'],
-                answer_id=item['answer_id'],
-                text_content=item['text_content'],
-                embedding=embedding_vector,
-                metadata={
-                    'quiz_id': str(item['quiz_id']),
-                    'subject_id': str(item['subject_id']),
-                    'indexed_at': 'auto',
-                }
-            )
-            embedding_entities.append(entity)
-        
-        # 5. Sauvegarder en batch
-        indexed_count = await embedding_repo.save_batch(embedding_entities)
-        
-        # 6. Commit
-        await session.commit()
-        
-        return {
-            "indexed": indexed_count,
-            "skipped": 0,
-            "errors": 0,
-            "batch_size": batch_size,
-        }
+    engine, session_maker = create_celery_session_maker()
+
+    try:
+        async with session_maker() as session:
+            embedding_repo = PostgresEmbeddingRepository(session)
+            embedding_service = EmbeddingService()
+            
+            # 1. Récupérer les réponses non indexées
+            unindexed = await embedding_repo.get_unindexed_responses(limit=batch_size)
+            
+            if not unindexed:
+                app_logger.info("No new responses to index")
+                return {"indexed": 0, "skipped": 0, "errors": 0}
+            
+            app_logger.info(f"Found {len(unindexed)} responses to index")
+            
+            # 2. Préparer les textes pour batch embedding
+            texts = [item['text_content'] for item in unindexed]
+            
+            # 3. Générer les embeddings en batch (plus efficace)
+            try:
+                embeddings = await embedding_service.embed_batch(texts)
+            except Exception as e:
+                app_logger.error(f"Error generating embeddings: {e}")
+                return {"indexed": 0, "skipped": len(unindexed), "errors": len(unindexed)}
+            
+            # 4. Créer les entités et sauvegarder
+            embedding_entities = []
+            for item, embedding_vector in zip(unindexed, embeddings):
+                entity = ResponseEmbedding(
+                    id=uuid4(),
+                    response_id=item['response_id'],
+                    answer_id=item['answer_id'],
+                    text_content=item['text_content'],
+                    embedding=embedding_vector,
+                    metadata={
+                        'quiz_id': str(item['quiz_id']),
+                        'subject_id': str(item['subject_id']),
+                        'indexed_at': 'auto',
+                    }
+                )
+                embedding_entities.append(entity)
+            
+            # 5. Sauvegarder en batch
+            indexed_count = await embedding_repo.save_batch(embedding_entities)
+            
+            # 6. Commit
+            await session.commit()
+            
+            return {
+                "indexed": indexed_count,
+                "skipped": 0,
+                "errors": 0,
+                "batch_size": batch_size,
+            }
+    finally:
+        await engine.dispose()
 
 @celery_app.task(
     name="src.infrastructure.jobs.index_responses.reindex_subject_task",

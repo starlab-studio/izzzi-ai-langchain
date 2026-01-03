@@ -1,6 +1,7 @@
 from typing import List, Dict, Any
 from uuid import UUID
 from datetime import datetime
+import hashlib
 
 from src.application.facades.analysis_facade import AnalysisFacade
 from src.domain.entities.insight import InsightType, InsightPriority
@@ -49,14 +50,32 @@ class GenerateFeedbackAlertsUseCase:
             insight_type = insight.get("type", "")
             
             if priority in ["high", "urgent"] and insight_type in ["alert", "negative"]:
+                evidence_list = insight.get("evidence", [])
+                evidence_strings = []
+                for ev in evidence_list:
+                    if isinstance(ev, dict):
+                        text = ev.get("text") or ev.get("example", "")
+                        if text:
+                            evidence_strings.append(text)
+                    elif isinstance(ev, str):
+                        evidence_strings.append(ev)
+                
+                title = insight.get("title", "")
+                content = insight.get("content", "")
+                content_hash = hashlib.md5(
+                    f"{title}{content}{subject_id}".encode()
+                ).hexdigest()[:8]
+                timestamp_str = str(int(datetime.now().timestamp()))
+                alert_id = f"alert_{subject_id}_{content_hash}_{timestamp_str}"
+                
                 alerts.append({
-                    "id": f"alert_{subject_id}_{idx}",
+                    "id": alert_id,
                     "type": "negative" if insight_type == "negative" else "alert",
                     "number": f"Alerte {len(alerts) + 1}/{len([i for i in all_insights if i.get('priority') in ['high', 'urgent']])}",
-                    "content": insight.get("content", ""),
-                    "title": insight.get("title", ""),
+                    "content": content,
+                    "title": title,
                     "priority": priority,
-                    "evidence": insight.get("evidence", []),
+                    "evidence": evidence_strings,
                     "timestamp": datetime.now().isoformat(),
                 })
         

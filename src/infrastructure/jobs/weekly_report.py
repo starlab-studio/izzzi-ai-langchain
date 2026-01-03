@@ -5,7 +5,7 @@ from sqlalchemy import text
 import httpx
 
 from src.infrastructure.jobs.celery_app import celery_app
-from src.infrastructure.database.connection import async_session_maker
+from src.infrastructure.database.connection import create_celery_session_maker
 from src.infrastructure.frameworks.agent_service import ReportGeneratorAgent
 from src.core.logger import app_logger
 from src.configs import get_settings
@@ -41,68 +41,72 @@ def weekly_report_task():
 
 async def weekly_report_async() -> Dict[str, Any]:
     """Génération des rapports hebdomadaires"""
-    
-    async with async_session_maker() as session:
-        # 1. Récupérer les organisations avec activité
-        query = text("""
-            SELECT 
-                o.id as organization_id,
-                o.name as organization_name,
-                ARRAY_AGG(DISTINCT s.id) as subject_ids,
-                COUNT(DISTINCT r.id) as total_responses
-            FROM organizations o
-            JOIN subjects s ON s.organization_id = o.id
-            JOIN quizzes q ON q.subject_id = s.id
-            JOIN responses r ON r.quiz_id = q.id
-            WHERE r.submitted_at >= NOW() - INTERVAL '7 days'
-              AND s.is_active = true
-            GROUP BY o.id, o.name
-            HAVING COUNT(DISTINCT r.id) >= 10
-        """)
-        
-        result = await session.execute(query)
-        organizations = result.fetchall()
-        
-        if not organizations:
-            app_logger.info("No organizations with sufficient activity")
-            return {"reports_generated": 0}
-        
-        app_logger.info(f"Generating reports for {len(organizations)} organizations")
-        
-        # 2. Créer l'agent générateur de rapports
-        agent = await create_report_agent()
-        
-        reports_generated = 0
-        
-        for org in organizations:
-            try:
-                # Générer le rapport via l'agent
-                report = await agent.generate_weekly_report(
-                    subject_ids=[str(sid) for sid in org.subject_ids],
-                    organization_name=org.organization_name,
-                )
-                
-                # Sauvegarder le rapport et déclencher les notifications
-                await save_report(
-                    organization_id=str(org.organization_id),
-                    organization_name=org.organization_name,
-                    report_content=report,
-                    subject_ids=[str(sid) for sid in org.subject_ids],
-                )
-                
-                reports_generated += 1
-                
-            except Exception as e:
-                app_logger.error(f"Error generating report for org {org.organization_id}: {e}")
-                continue
-        
-        await session.commit()
-        
-        return {
-            "reports_generated": reports_generated,
-            "organizations_processed": len(organizations),
-            "timestamp": datetime.now().isoformat(),
-        }
+    engine, session_maker = create_celery_session_maker()
+
+    try:
+        async with session_maker() as session:
+            # 1. Récupérer les organisations avec activité
+            query = text("""
+                SELECT 
+                    o.id as organization_id,
+                    o.name as organization_name,
+                    ARRAY_AGG(DISTINCT s.id) as subject_ids,
+                    COUNT(DISTINCT r.id) as total_responses
+                FROM organizations o
+                JOIN subjects s ON s.organization_id = o.id
+                JOIN quizzes q ON q.subject_id = s.id
+                JOIN responses r ON r.quiz_id = q.id
+                WHERE r.submitted_at >= NOW() - INTERVAL '7 days'
+                AND s.is_active = true
+                GROUP BY o.id, o.name
+                HAVING COUNT(DISTINCT r.id) >= 10
+            """)
+            
+            result = await session.execute(query)
+            organizations = result.fetchall()
+            
+            if not organizations:
+                app_logger.info("No organizations with sufficient activity")
+                return {"reports_generated": 0}
+            
+            app_logger.info(f"Generating reports for {len(organizations)} organizations")
+            
+            # 2. Créer l'agent générateur de rapports
+            agent = await create_report_agent()
+            
+            reports_generated = 0
+            
+            for org in organizations:
+                try:
+                    # Générer le rapport via l'agent
+                    report = await agent.generate_weekly_report(
+                        subject_ids=[str(sid) for sid in org.subject_ids],
+                        organization_name=org.organization_name,
+                    )
+                    
+                    # Sauvegarder le rapport et déclencher les notifications
+                    await save_report(
+                        organization_id=str(org.organization_id),
+                        organization_name=org.organization_name,
+                        report_content=report,
+                        subject_ids=[str(sid) for sid in org.subject_ids],
+                    )
+                    
+                    reports_generated += 1
+                    
+                except Exception as e:
+                    app_logger.error(f"Error generating report for org {org.organization_id}: {e}")
+                    continue
+            
+            await session.commit()
+            
+            return {
+                "reports_generated": reports_generated,
+                "organizations_processed": len(organizations),
+                "timestamp": datetime.now().isoformat(),
+            }
+    finally:
+        await engine.dispose()
 
 async def create_report_agent() -> ReportGeneratorAgent:
     """Créer l'agent de génération de rapports"""

@@ -39,7 +39,7 @@ celery_app.conf.beat_schedule = {
     # Analyse quotidienne à 6h du matin
     "daily-analysis": {
         "task": "src.infrastructure.jobs.daily_analysis.daily_analysis_task",
-        "schedule": crontab(hour=6, minute=0),
+        "schedule": timedelta(minutes=1),
     },
     
     # Rapport hebdomadaire le lundi à 8h
