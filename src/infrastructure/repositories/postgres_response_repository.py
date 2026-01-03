@@ -16,6 +16,7 @@ class PostgresResponseRepository:
         subject_id: UUID,
         period_start: Optional[datetime] = None,
         period_end: Optional[datetime] = None,
+        form_type: Optional[str] = None,
     ) -> List[dict]:
         filters = ["q.subject_id = :subject_id", "a.value_text IS NOT NULL"]
         params = {"subject_id": str(subject_id)}
@@ -27,6 +28,10 @@ class PostgresResponseRepository:
         if period_end:
             filters.append("r.submitted_at <= :period_end")
             params["period_end"] = period_end
+        
+        if form_type:
+            filters.append("q.type = :form_type")
+            params["form_type"] = form_type
         
         where_clause = " AND ".join(filters)
         

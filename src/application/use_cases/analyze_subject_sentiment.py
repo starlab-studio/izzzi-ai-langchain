@@ -29,6 +29,7 @@ class AnalyzeSubjectSentimentUseCase:
         subject_id: UUID,
         period_days: int = 30,
         user_id: Optional[UUID] = None,
+        form_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Analyse le sentiment pour une matière
@@ -37,16 +38,21 @@ class AnalyzeSubjectSentimentUseCase:
             subject_id: ID de la matière
             period_days: Période d'analyse en jours
             user_id: ID de l'utilisateur (pour traçabilité)
+            form_type: Type de formulaire ("during_course" ou "after_course")
         
         Returns:
             Analyse de sentiment complète
         """
-        app_logger.info(f"Analyzing sentiment for subject {subject_id} over {period_days} days")
+        log_msg = f"Analyzing sentiment for subject {subject_id} over {period_days} days"
+        if form_type:
+            log_msg += f" (form_type: {form_type})"
+        app_logger.info(log_msg)
         
         period_start = datetime.now() - timedelta(days=period_days)
         responses = await self.response_repo.get_text_responses_by_subject(
             subject_id=subject_id,
             period_start=period_start,
+            form_type=form_type,
         )
         
         if len(responses) < 5:

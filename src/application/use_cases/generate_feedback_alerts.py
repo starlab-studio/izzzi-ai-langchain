@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from uuid import UUID
 from datetime import datetime
 import hashlib
@@ -20,6 +20,7 @@ class GenerateFeedbackAlertsUseCase:
         self,
         subject_id: UUID,
         period_days: int = 30,
+        form_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Génère les alertes à partir des insights
@@ -27,27 +28,39 @@ class GenerateFeedbackAlertsUseCase:
         Args:
             subject_id: ID de la matière
             period_days: Période d'analyse
+            form_type: Type de formulaire ("during_course" ou "after_course")
         
         Returns:
             Liste d'alertes formatées pour le frontend
         """
-        app_logger.info(f"Generating feedback alerts for subject {subject_id}")
+        log_msg = f"Generating feedback alerts for subject {subject_id}"
+        if form_type:
+            log_msg += f" (form_type: {form_type})"
+        app_logger.info(log_msg)
         
         try:
             insights_data = await self.analysis_facade.generate_comprehensive_insights(
                 subject_id=subject_id,
                 period_days=period_days,
+                form_type=form_type,
             )
         except Exception as e:
             app_logger.error(f"Error generating insights for alerts: {e}")
             return []
         
         all_insights = insights_data.get("insights", [])
+        app_logger.info(
+            f"Found {len(all_insights)} insights for subject {subject_id}, form_type: {form_type}"
+        )
         
         alerts = []
         for idx, insight in enumerate(all_insights):
             priority = insight.get("priority", "")
             insight_type = insight.get("type", "")
+            
+            app_logger.info(
+                f"Insight {idx}: type={insight_type}, priority={priority}, will generate alert: {priority in ['high', 'urgent'] and insight_type in ['alert', 'negative']}"
+            )
             
             if priority in ["high", "urgent"] and insight_type in ["alert", "negative"]:
                 evidence_list = insight.get("evidence", [])
@@ -68,7 +81,7 @@ class GenerateFeedbackAlertsUseCase:
                 timestamp_str = str(int(datetime.now().timestamp()))
                 alert_id = f"alert_{subject_id}_{content_hash}_{timestamp_str}"
                 
-                alerts.append({
+                alert_data = {
                     "id": alert_id,
                     "type": "negative" if insight_type == "negative" else "alert",
                     "number": f"Alerte {len(alerts) + 1}/{len([i for i in all_insights if i.get('priority') in ['high', 'urgent']])}",
@@ -77,7 +90,12 @@ class GenerateFeedbackAlertsUseCase:
                     "priority": priority,
                     "evidence": evidence_strings,
                     "timestamp": datetime.now().isoformat(),
-                })
+                }
+                
+                if form_type:
+                    alert_data["formType"] = form_type
+                
+                alerts.append(alert_data)
         
         app_logger.info(f"Generated {len(alerts)} alerts for subject {subject_id}")
         

@@ -37,6 +37,7 @@ class AnalysisFacade:
         subject_id: UUID,
         period_days: int = 30,
         user_id: Optional[UUID] = None,
+        form_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Analyse complète du sentiment pour une matière
@@ -54,6 +55,7 @@ class AnalysisFacade:
                 subject_id=subject_id,
                 period_days=period_days,
                 user_id=user_id,
+                form_type=form_type,
             )
             
             # 2. Essayer d'identifier les thèmes (si assez de données)
@@ -78,6 +80,7 @@ class AnalysisFacade:
         subject_id: UUID,
         period_days: int = 30,
         user_id: Optional[UUID] = None,
+        form_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Génère des insights complets combinant plusieurs analyses
@@ -95,6 +98,7 @@ class AnalysisFacade:
             subject_id=subject_id,
             period_days=period_days,
             user_id=user_id,
+            form_type=form_type,
         )
         
         # 2. Clustering des thèmes
@@ -113,6 +117,14 @@ class AnalysisFacade:
             themes=themes,
             subject_id=subject_id,
         )
+        
+        app_logger.info(
+            f"Generated {len(insights)} insights for subject {subject_id}, form_type: {form_type}, sentiment score: {sentiment.get('overall_score', 'N/A')}"
+        )
+        for idx, insight in enumerate(insights):
+            app_logger.info(
+                f"  Insight {idx}: type={insight.get('type')}, priority={insight.get('priority')}"
+            )
         
         return {
             'subject_id': str(subject_id),

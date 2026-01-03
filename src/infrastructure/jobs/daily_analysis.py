@@ -74,7 +74,8 @@ async def daily_analysis_async() -> Dict[str, Any]:
     
     try:
         async with session_maker() as session:
-            # Query to get subjects with recent responses, including organization name
+            # Rechercher les sujets avec des réponses dans les 7 derniers jours
+            # (correspond à period_days=7 utilisé pour générer les alertes)
             query = text("""
                 SELECT DISTINCT 
                     s.id as subject_id,
@@ -86,7 +87,7 @@ async def daily_analysis_async() -> Dict[str, Any]:
                 JOIN organizations o ON o.id = s.organization_id
                 JOIN quizzes q ON q.subject_id = s.id
                 JOIN responses r ON r.quiz_id = q.id
-                WHERE r.submitted_at >= NOW() - INTERVAL '24 hours'
+                WHERE r.submitted_at >= NOW() - INTERVAL '7 days'
                 AND s.is_active = true
                 GROUP BY s.id, s.name, s.organization_id, o.name
                 HAVING COUNT(DISTINCT r.id) >= 3
@@ -106,24 +107,20 @@ async def daily_analysis_async() -> Dict[str, Any]:
             total_alerts_sent = 0
             skipped_count = 0
             
-            # Group subjects by organization for batch processing
             subjects_by_org = defaultdict(list)
             for subject in subjects:
                 subjects_by_org[str(subject.organization_id)].append(subject)
             
             for organization_id, org_subjects in subjects_by_org.items():
                 try:
-                    # Create facade and use case for this organization
                     facade = await create_facade_for_analysis(session)
                     alerts_use_case = GenerateFeedbackAlertsUseCase(analysis_facade=facade)
                     
-                    # Process each subject in this organization
                     alerts_by_subject: Dict[str, Dict[str, Any]] = {}
                     
                     for subject in org_subjects:
                         subject_id_str = str(subject.subject_id)
                         
-                        # Try to acquire lock for this subject
                         if not acquire_subject_lock(subject_id_str):
                             app_logger.info(
                                 f"Subject {subject_id_str} already being processed by another worker, skipping"
@@ -134,15 +131,47 @@ async def daily_analysis_async() -> Dict[str, Any]:
                         try:
                             subject_id = UUID(subject_id_str)
                             
-                            # Generate alerts using the use case
-                            alerts = await alerts_use_case.execute(
-                                subject_id=subject_id,
-                                period_days=7,  # Last week
+                            form_types_query = text("""
+                                SELECT DISTINCT q.type
+                                FROM quizzes q
+                                WHERE q.subject_id = :subject_id
+                                AND q.type IN ('during_course', 'after_course')
+                            """)
+                            form_types_result = await session.execute(
+                                form_types_query,
+                                {"subject_id": subject_id_str}
                             )
+                            form_types_rows = form_types_result.fetchall()
+                            available_form_types = [row[0] for row in form_types_rows]
                             
-                            if alerts:
+                            if not available_form_types:
+                                available_form_types = [None]
+                            
+                            all_alerts = []
+                            for form_type in available_form_types:
+                                app_logger.info(
+                                    f"Generating alerts for subject {subject_id_str} with form_type: {form_type}"
+                                )
+                                alerts = await alerts_use_case.execute(
+                                    subject_id=subject_id,
+                                    period_days=7,
+                                    form_type=form_type,
+                                )
+                                app_logger.info(
+                                    f"Generated {len(alerts)} alerts for subject {subject_id_str} with form_type: {form_type}"
+                                )
+                                if alerts:
+                                    app_logger.info(
+                                        f"Alert details: {[a.get('id') for a in alerts]}, formTypes: {[a.get('formType') for a in alerts]}"
+                                    )
+                                all_alerts.extend(alerts)
+                            
+                            app_logger.info(
+                                f"Total alerts for subject {subject_id_str}: {len(all_alerts)}"
+                            )
+                            if all_alerts:
                                 alerts_by_subject[subject_id_str] = {
-                                    'alerts': alerts,
+                                    'alerts': all_alerts,
                                     'subject_name': subject.subject_name,
                                     'organization_name': subject.organization_name,
                                 }
@@ -152,10 +181,8 @@ async def daily_analysis_async() -> Dict[str, Any]:
                             app_logger.error(f"Error generating alerts for subject {subject_id_str}: {e}")
                             continue
                         finally:
-                            # Always release the lock after processing
                             release_subject_lock(subject_id_str)
                     
-                    # Send alerts grouped by subject to backend
                     if alerts_by_subject:
                         for subject_id, alert_data in alerts_by_subject.items():
                             try:
@@ -291,6 +318,11 @@ async def send_alert_to_backend(
     backend_url = settings.BACKEND_URL
     
     app_logger.info(f"Sending {len(alerts)} alert(s) to backend for subject {subject_id}")
+    
+    for idx, alert in enumerate(alerts):
+        app_logger.info(
+            f"  Alert {idx + 1}: id={alert.get('id')}, formType={alert.get('formType')}, type={alert.get('type')}, priority={alert.get('priority')}"
+        )
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
