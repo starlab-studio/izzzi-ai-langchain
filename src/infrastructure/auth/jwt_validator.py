@@ -8,8 +8,6 @@ from datetime import datetime
 from src.core.logger import app_logger
 from src.configs import get_settings
 
-# ⭐ Configuration JWT (IDENTIQUE à NestJS)
-# Chargement lazy pour éviter les problèmes d'import circulaire
 def get_jwt_secret() -> str:
     """Récupère le JWT_SECRET depuis la configuration"""
     settings = get_settings()
@@ -22,13 +20,9 @@ def get_jwt_algorithm() -> str:
     settings = get_settings()
     return settings.JWT_ALGORITHM
 
-# Security scheme
-# auto_error=False pour gérer l'erreur manuellement avec un meilleur logging
+
 security = HTTPBearer(auto_error=False)
 
-# ==========================================
-# Modèles Pydantic
-# ==========================================
 
 class TokenPayload(BaseModel):
     """
@@ -43,15 +37,14 @@ class TokenPayload(BaseModel):
         "roles": [{"organizationId": string, "role": string}]
     }
     """
-    sub: str  # providerUserId
-    userId: str  # user ID
-    username: str  # email
-    roles: List[Dict[str, Any]] = []  # [{"organizationId": "...", "role": "..."}]
-    iat: Optional[int] = None  # Issued at
-    exp: Optional[int] = None  # Expiration
+    sub: str
+    userId: str
+    username: str
+    roles: List[Dict[str, Any]] = []
+    iat: Optional[int] = None
+    exp: Optional[int] = None
     
     class Config:
-        # Permettre des champs supplémentaires dans le payload
         extra = "allow"
 
 class CurrentUser(BaseModel):
@@ -61,9 +54,6 @@ class CurrentUser(BaseModel):
     organization_id: Optional[str] = None
     role: Optional[str] = None
 
-# ==========================================
-# Validation JWT
-# ==========================================
 
 def decode_jwt(token: str) -> TokenPayload:
     """
@@ -78,7 +68,6 @@ def decode_jwt(token: str) -> TokenPayload:
         HTTPException: Si JWT invalide
     """
     try:
-        # ⭐ Décoder avec le MÊME secret que NestJS
         jwt_secret = get_jwt_secret()
         jwt_algorithm = get_jwt_algorithm()
         
@@ -91,9 +80,8 @@ def decode_jwt(token: str) -> TokenPayload:
         app_logger.info(f"JWT decoded successfully for user: {payload.get('sub')}")
         app_logger.info(f"JWT payload keys: {list(payload.keys())}")
         
-        # Valider la structure du payload
         try:
-        token_data = TokenPayload(**payload)
+            token_data = TokenPayload(**payload)
         except ValidationError as e:
             app_logger.error(f"Pydantic validation error: {e.errors()}")
             app_logger.error(f"Payload received: {payload}")
@@ -103,7 +91,6 @@ def decode_jwt(token: str) -> TokenPayload:
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Vérifier l'expiration manuellement (optionnel, jose le fait déjà)
         if token_data.exp and token_data.exp < datetime.now().timestamp():
             app_logger.warning(f"Expired JWT for user: {token_data.sub}")
             raise HTTPException(
@@ -129,7 +116,6 @@ def decode_jwt(token: str) -> TokenPayload:
             headers={"WWW-Authenticate": "Bearer"},
         )
     except HTTPException:
-        # Re-raise les HTTPException
         raise
     except Exception as e:
         app_logger.error(f"Unexpected error decoding JWT: {e}", exc_info=True)
@@ -161,7 +147,7 @@ async def get_current_user(
         ):
             # current_user.id, current_user.email disponibles
     """
-    # Vérifier que les credentials sont présents
+
     if not credentials:
         app_logger.error("No Authorization header provided")
         raise HTTPException(
@@ -170,7 +156,6 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Extraire le token du header Authorization
     token = credentials.credentials
     
     if not token:
@@ -183,28 +168,24 @@ async def get_current_user(
     
     app_logger.info(f"Validating JWT: {token[:20]}... (length: {len(token)})")
     
-    # Décoder et valider
     try:
-    payload = decode_jwt(token)
+        payload = decode_jwt(token)
     except HTTPException as e:
         app_logger.error(f"JWT validation failed: {e.detail}")
         raise
     
-    # Prendre le premier rôle disponible (l'organizationId sera extrait depuis les query params dans les endpoints si nécessaire)
     organization_id_final = None
     role_final = None
     
     if payload.roles and len(payload.roles) > 0:
-        # Accéder aux valeurs du dictionnaire de manière sécurisée
         first_role = payload.roles[0]
         if isinstance(first_role, dict):
             organization_id_final = first_role.get("organizationId")
             role_final = first_role.get("role")
     
-    # Créer l'objet CurrentUser
     current_user = CurrentUser(
-        id=payload.userId,  # Utiliser userId au lieu de sub
-        email=payload.username,  # username contient l'email dans NestJS
+        id=payload.userId,
+        email=payload.username,
         organization_id=organization_id_final,
         role=role_final,
     )

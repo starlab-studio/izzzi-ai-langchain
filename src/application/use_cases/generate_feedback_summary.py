@@ -83,20 +83,45 @@ class GenerateFeedbackSummaryUseCase:
         
         return result
     
+    def _get_sentiment_description(self, score: float) -> str:
+        """
+        Convertit un score de sentiment numérique en description humaine
+        
+        Args:
+            score: Score entre -1.0 (très négatif) et 1.0 (très positif)
+        
+        Returns:
+            Description textuelle du sentiment
+        """
+        if score >= 0.6:
+            return "très positif"
+        elif score >= 0.2:
+            return "plutôt positif"
+        elif score >= -0.2:
+            return "neutre"
+        elif score >= -0.6:
+            return "plutôt négatif"
+        else:
+            return "très négatif"
+    
     async def _generate_text_summary(self, insights_data: Dict[str, Any]) -> str:
         """Génère un résumé court (2-3 phrases)"""
         sentiment = insights_data.get("sentiment", {})
         themes = insights_data.get("themes", [])
         insights = insights_data.get("insights", [])
         
+        sentiment_score = sentiment.get('overall_score', 0)
+        sentiment_description = self._get_sentiment_description(sentiment_score)
+        
         prompt = f"""
             Génère un résumé court (2-3 phrases) des retours d'élèves pour cette matière.
 
-            Sentiment global: {sentiment.get('overall_score', 0):.2f} (sur -1 à 1)
+            Sentiment global: {sentiment_description}
             Thèmes identifiés: {len(themes)}
             Insights: {len(insights)}
 
             Résumé court (2-3 phrases, en français, factuel et actionnable):
+            Note: Ne mentionne pas de scores numériques, utilise des descriptions qualitatives.
         """
         
         try:
@@ -112,16 +137,22 @@ class GenerateFeedbackSummaryUseCase:
         themes = insights_data.get("themes", [])
         insights = insights_data.get("insights", [])
         
+        sentiment_score = sentiment.get('overall_score', 0)
+        sentiment_description = self._get_sentiment_description(sentiment_score)
+        positive_pct = sentiment.get('positive_percentage', 0)
+        negative_pct = sentiment.get('negative_percentage', 0)
+        
         prompt = f"""
             Génère un résumé détaillé des retours d'élèves pour cette matière.
 
             Données:
-            - Sentiment global: {sentiment.get('overall_score', 0):.2f}
-            - Distribution: {sentiment.get('positive_percentage', 0):.0f}% positif, {sentiment.get('negative_percentage', 0):.0f}% négatif
+            - Sentiment global: {sentiment_description}
+            - Distribution: {positive_pct:.0f}% de retours positifs, {negative_pct:.0f}% de retours négatifs
             - Thèmes principaux: {', '.join([t.get('label', '') for t in themes[:3]])}
-            - Insights actionnables: {len([i for i in insights if i.get('priority') in ['high', 'urgent']])}
+            - Insights actionnables prioritaires: {len([i for i in insights if i.get('priority') in ['high', 'urgent']])}
 
             Résumé détaillé (paragraphe structuré, en français, factuel et actionnable):
+            Note: Utilise un langage clair et accessible, évite les scores numériques de sentiment.
         """
         
         try:

@@ -1,8 +1,10 @@
 from typing import Dict, Any, List
 from uuid import UUID
 import numpy as np
+import warnings
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+from sklearn.exceptions import ConvergenceWarning
 
 from src.domain.repositories.embedding_repository import IEmbeddingRepository
 from src.infrastructure.frameworks.langchain_service import LangChainService
@@ -47,7 +49,7 @@ class ClusterResponsesUseCase:
                 ]
             }
         """
-        app_logger.info(f"Clustering responses for subject {subject_id} (n_clusters={n_clusters})")
+        app_logger.info(f"Clustering responses for subject {subject_id} (requested n_clusters={n_clusters})")
         
         dummy_embedding = [0.0] * 1536
         
@@ -58,11 +60,35 @@ class ClusterResponsesUseCase:
             similarity_threshold=0.0,
         )
         
-        if len(all_results) < n_clusters:
+        num_responses = len(all_results)
+        
+        # Minimum 2 responses required for clustering
+        if num_responses < 2:
             raise InsufficientDataException(
-                f"Not enough responses for clustering (need at least {n_clusters}, got {len(all_results)})",
-                min_required=n_clusters,
-                actual=len(all_results),
+                f"Not enough responses for clustering (need at least 2, got {num_responses})",
+                min_required=2,
+                actual=num_responses,
+            )
+        
+        # Dynamically adjust n_clusters based on available data
+        # Heuristic: use min(n_clusters, num_responses) but ensure at least 2 clusters if we have enough data
+        # For very small datasets, limit to 2 clusters max
+        if num_responses < 4:
+            adjusted_n_clusters = 2
+        elif num_responses < n_clusters:
+            # If we have fewer responses than requested clusters, use all responses as potential clusters
+            # But limit to a reasonable number (e.g., num_responses - 1 or num_responses // 2)
+            adjusted_n_clusters = max(2, min(n_clusters, num_responses // 2))
+        else:
+            adjusted_n_clusters = n_clusters
+        
+        # Final safety check: n_clusters cannot exceed num_responses
+        adjusted_n_clusters = min(adjusted_n_clusters, num_responses)
+        
+        if adjusted_n_clusters != n_clusters:
+            app_logger.info(
+                f"Adjusted n_clusters from {n_clusters} to {adjusted_n_clusters} "
+                f"(available responses: {num_responses})"
             )
         
         embeddings_list = [emb.embedding for emb, _ in all_results]
@@ -71,10 +97,17 @@ class ClusterResponsesUseCase:
         scaler = StandardScaler()
         embeddings_normalized = scaler.fit_transform(embeddings_data)
         
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        cluster_labels = kmeans.fit_predict(embeddings_normalized)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            kmeans = KMeans(n_clusters=adjusted_n_clusters, random_state=42, n_init=10)
+            cluster_labels = kmeans.fit_predict(embeddings_normalized)
         
-        app_logger.info(f"Clustering completed: {n_clusters} clusters identified")
+
+        unique_clusters = len(set(cluster_labels))
+        app_logger.info(
+            f"Clustering completed: {unique_clusters} unique clusters identified "
+            f"(requested: {adjusted_n_clusters}, responses: {num_responses})"
+        )
         
         clusters_data = {}
         for idx, (embedding, _) in enumerate(all_results):
@@ -115,7 +148,8 @@ class ClusterResponsesUseCase:
         return {
             "clusters": clusters,
             "total_responses": len(all_results),
-            "n_clusters": n_clusters,
+            "n_clusters": adjusted_n_clusters,
+            "requested_n_clusters": n_clusters,
         }
     
     async def _generate_cluster_label(self, examples_text: str) -> str:

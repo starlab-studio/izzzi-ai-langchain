@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
+import json
 
 from src.domain.entities.embedding import ResponseEmbedding
 from src.domain.repositories.embedding_repository import IEmbeddingRepository
@@ -113,22 +114,41 @@ class PostgresEmbeddingRepository(IEmbeddingRepository):
         
         app_logger.info(f"Found {len(rows)} similar embeddings")
         
-        return [
-            (
+        results = []
+        for row in rows:
+            # Parse embedding from PostgreSQL vector type
+            # asyncpg returns vectors as strings like "[0.1, 0.2, 0.3, ...]"
+            if isinstance(row.embedding, str):
+                # Parse the string representation
+                embedding_list = json.loads(row.embedding)
+            elif isinstance(row.embedding, (list, tuple)):
+                embedding_list = list(row.embedding)
+            else:
+                # Fallback: try to convert to list
+                try:
+                    embedding_list = list(row.embedding)
+                except (TypeError, ValueError) as e:
+                    app_logger.error(
+                        f"Failed to parse embedding for row {row.id}: {type(row.embedding)} - {e}"
+                    )
+                    # Use zero vector as fallback
+                    embedding_list = [0.0] * 1536
+            
+            results.append((
                 ResponseEmbedding(
                     id=row.id,
                     response_id=row.response_id,
                     answer_id=row.answer_id,
                     text_content=row.text_content,
-                    embedding=list(row.embedding),
+                    embedding=embedding_list,
                     metadata=row.metadata or {},
                     created_at=row.created_at,
                     updated_at=row.updated_at,
                 ),
                 float(row.similarity)
-            )
-            for row in rows
-        ]
+            ))
+        
+        return results
     
     async def get_unindexed_responses(
         self,
