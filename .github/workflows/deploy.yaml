@@ -38,7 +38,7 @@ jobs:
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
@@ -78,6 +78,26 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            ENVIRONMENT=${{ secrets.ENVIRONMENT }}
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            DATABASE_PORT=${{ secrets.DATABASE_PORT }}
+            DATABASE_NAME=${{ secrets.DATABASE_NAME }}
+            DATABASE_USER=${{ secrets.DATABASE_USER }}
+            DATABASE_PASSWORD=${{ secrets.DATABASE_PASSWORD }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            JWT_ALGORITHM=${{ secrets.JWT_ALGORITHM }}
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            OPENAI_MODEL=${{ secrets.OPENAI_MODEL }}
+            EMBEDDING_MODEL=${{ secrets.EMBEDDING_MODEL }}
+            REDIS_URL=${{ secrets.REDIS_URL }}
+            CELERY_BROKER_URL=${{ secrets.CELERY_BROKER_URL }}
+            CELERY_RESULT_BACKEND=${{ secrets.CELERY_RESULT_BACKEND }}
+            API_V1_PREFIX=${{ secrets.API_V1_PREFIX }}
+            CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
+            SERVICE_NAME=${{ secrets.SERVICE_NAME }}
+            SERVICE_PORT=${{ secrets.SERVICE_PORT }}
+            NESTJS_API_URL=${{ secrets.NESTJS_API_URL }}
 
   # Security scanning
   security-scan:
