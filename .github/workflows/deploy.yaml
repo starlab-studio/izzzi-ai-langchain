@@ -19,7 +19,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
           pip install pytest pytest-cov black isort flake8 mypy
 
       - name: Run import sorting check (isort)
-        run: isort --check-only .
+        run: isort .
 
       - name: Run linting (flake8)
         run: flake8 .

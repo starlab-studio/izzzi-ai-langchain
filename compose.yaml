@@ -1,0 +1,102 @@
+# ============================================
+# AI Service - Development Docker Compose
+# ============================================
+# This service connects to the shared PostgreSQL and Redis
+# started by the backend docker-compose.
+#
+# Start order:
+# 1. First start backend: cd backend && docker compose -f docker-compose.dev.yml up -d
+# 2. Then start AI service: cd ai-service && docker compose -f docker-compose.dev.yml up -d
+
+services:
+  ai-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: izzzi-ai-api
+    restart: unless-stopped
+    ports:
+      - "${SERVICE_PORT:-8000}:8000"
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Database - connects to shared PostgreSQL, uses 'ai' schema
+      DATABASE_URL: postgresql+asyncpg://${DATABASE_USER:-izzzi}:${DATABASE_PASSWORD:-izzzi_password}@izzzi-postgres:5432/${DATABASE_NAME:-izzzi_db}
+      DATABASE_SCHEMA: ai
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-20}
+      DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-10}
+      # JWT (same secret as backend for token validation)
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4-turbo-preview}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      # Redis - uses different DBs on same instance
+      REDIS_URL: redis://izzzi-redis:6379/1
+      CELERY_BROKER_URL: redis://izzzi-redis:6379/2
+      CELERY_RESULT_BACKEND: redis://izzzi-redis:6379/3
+      # API Config
+      API_V1_PREFIX: ${API_V1_PREFIX:-/api/v1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001"]}
+      SERVICE_NAME: ${SERVICE_NAME:-izzzi-ai-service}
+      SERVICE_PORT: ${SERVICE_PORT:-8000}
+      # Backend URL for callbacks
+      BACKEND_URL: ${BACKEND_URL:-http://izzzi-backend-dev:3001}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - izzzi-network
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: izzzi-celery-worker
+    restart: unless-stopped
+    command: celery -A src.infrastructure.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${DATABASE_USER:-izzzi}:${DATABASE_PASSWORD:-izzzi_password}@izzzi-postgres:5432/${DATABASE_NAME:-izzzi_db}
+      DATABASE_SCHEMA: ai
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+      DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-5}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4-turbo-preview}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      REDIS_URL: redis://izzzi-redis:6379/1
+      CELERY_BROKER_URL: redis://izzzi-redis:6379/2
+      CELERY_RESULT_BACKEND: redis://izzzi-redis:6379/3
+      BACKEND_URL: ${BACKEND_URL:-http://izzzi-backend-dev:3001}
+    networks:
+      - izzzi-network
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: izzzi-celery-beat
+    restart: unless-stopped
+    command: celery -A src.infrastructure.celery_app beat --loglevel=info
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CELERY_BROKER_URL: redis://izzzi-redis:6379/2
+      CELERY_RESULT_BACKEND: redis://izzzi-redis:6379/3
+    networks:
+      - izzzi-network
+
+networks:
+  izzzi-network:
+    external: true
+    name: izzzi-network
