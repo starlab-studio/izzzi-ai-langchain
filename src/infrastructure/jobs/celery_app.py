@@ -33,13 +33,13 @@ celery_app.conf.beat_schedule = {
     # Indexer les nouvelles réponses toutes les minutes (modifier pour toutes les heures en prod)
     "index-new-responses": {
         "task": "src.infrastructure.jobs.index_responses.index_new_responses_task",
-        "schedule": timedelta(minutes=1),  # Toutes les minutes
+        "schedule": crontab(minute=0, hour="*/5"),
     },
     
     # Analyse quotidienne à 6h du matin
     "daily-analysis": {
         "task": "src.infrastructure.jobs.daily_analysis.daily_analysis_task",
-        "schedule": timedelta(minutes=1),
+        "schedule": crontab(minute=0, hour=6),
     },
     
     # Rapport hebdomadaire le lundi à 8h

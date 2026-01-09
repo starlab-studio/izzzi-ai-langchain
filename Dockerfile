@@ -1,7 +1,7 @@
 # ==========================================
 # Stage 1: Builder
 # ==========================================
-FROM python:3.11-slim AS builder
+FROM --platform=linux/amd64 python:3.11-slim AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -23,10 +23,11 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 # ==========================================
 # Stage 2: Runtime
 # ==========================================
-FROM python:3.11-slim
+FROM --platform=linux/amd64 python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH=/root/.local/bin:$PATH
 
 ARG ENVIRONMENT
 ARG DEBUG
@@ -74,8 +75,7 @@ ENV ENVIRONMENT=${ENVIRONMENT} \
     CORS_ORIGINS=${CORS_ORIGINS} \
     SERVICE_NAME=${SERVICE_NAME} \
     SERVICE_PORT=${SERVICE_PORT} \
-    NESTJS_API_URL=${NESTJS_API_URL} \
-    PATH=/root/.local/bin:$PATH
+    NESTJS_API_URL=${NESTJS_API_URL}
 
 WORKDIR /app
 
@@ -86,6 +86,9 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /root/.local /root/.local
 COPY . .
 
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE ${SERVICE_PORT:-8000}
 
-CMD uvicorn src.main:app --host 0.0.0.0 --port ${SERVICE_PORT:-8000}
+ENTRYPOINT ["/app/entrypoint.sh"]

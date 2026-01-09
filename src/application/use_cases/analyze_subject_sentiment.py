@@ -55,10 +55,10 @@ class AnalyzeSubjectSentimentUseCase:
             form_type=form_type,
         )
         
-        if len(responses) < 5:
+        if len(responses) < 2:
             raise InsufficientDataException(
                 "Not enough responses for sentiment analysis",
-                min_required=5,
+                min_required=2,
                 actual=len(responses),
             )
         
